@@ -1,0 +1,166 @@
+// The NASA Planetary Data System archive, audited and mapped, from the PDS
+// Registry Search API (about 90.7 million products across a dozen archive
+// sites, 2026-10).
+//
+// ⚠️ Both workflows describe the archive through its REGISTRY. A file the
+// registry does not list cannot be audited, and a product whose label records
+// no coordinates cannot be mapped, however well its own files geolocate it.
+
+namespace pds.audit {
+
+    /** Every archive site, with how many products it holds and how many carry
+      * an MD5.
+      *
+      * ⚠️ The products WITHOUT an MD5 are the part of the archive no checksum
+      * audit can speak for. They are counted here so the report can say so,
+      * rather than letting a clean sample imply a clean archive. */
+    event facet Strata(dest: String) => (strata_path: String, nodes: Json, products: Long)
+        with Effect(kind = "external") with Cost(tier = "free")
+
+    /** A uniform random sample per site, cut into batches.
+      *
+      * Drawn by sorting on the file MD5 and starting at a random 128-bit value:
+      * MD5s are uniform, so what follows a random point in hash order is an
+      * unbiased draw. The same seed draws the same sample. */
+    event facet Sample(strata_path: String, per_node: Long = 40, seed: Long = 1,
+            batch_size: Long = 10, dest: String) => (sample_path: String, batches: Json, sampled: Long)
+        with Effect(kind = "external") with Cost(tier = "free")
+
+    /** Fetch each product's files and compare them with the registry's size
+      * and MD5.
+      *
+      * ⚠️ Files over `max_mb` are checked for existence and size only, and are
+      * reported as "size only", never as verified: a byte count proves a file
+      * is not missing or truncated, not that its content is intact. */
+    event facet CheckBatch(batch: Json, max_mb: Double = 20.0, dest: String) => (results_path: String,
+            checked: Long, failed: Long)
+        with Effect(kind = "external") with Cost(tier = "moderate") with Timeout(minutes = 60)
+
+    /** Per-site failure rates with 95% Wilson intervals, scaled to the size of
+      * each site, plus every individual failure. */
+    event facet Report(strata_path: String, results: Json, seed: Long = 1, max_mb: Double = 20.0,
+            dest: String) => (report_path: String, html_path: String, checked: Long, failed: Long,
+            estimated_failing: Long)
+        with Effect(kind = "io") with Cost(tier = "free")
+
+    /** Check every batch, at most `width` at once.
+      *
+      * The cap is for the archive servers, not for us: each batch downloads
+      * from a public science archive, and an unbounded fan-out would hit one
+      * site with every batch at the same moment. */
+    facet CheckAll(batches: Json, max_mb: Double, width: Long, dest: String) => (results: Json)
+        andThen foreach b in $.batches limit $.width {
+            c = CheckBatch(batch = $.b, max_mb = $.max_mb, dest = $.dest)
+            yield CheckAll(results += c.results_path)
+        }
+}
+
+namespace pds.coverage {
+
+    /** Registry-wide: how much of the archive carries a bounding box, by body
+      * and by site, and which bodies and missions are spelled more than one
+      * way ("1 Ceres" and "(1) Ceres"; "MESSENGER" and "Messenger"). */
+    event facet Census(dest: String) => (census_path: String, registry_products: Long, with_footprint: Long)
+        with Effect(kind = "external") with Cost(tier = "free")
+
+    /** Every bounding box in the registry, one compact file per body.
+      *
+      * Spellings of one body are grouped (case, punctuation and a catalogue
+      * number are not identity), so "1 Ceres" and "(1) Ceres" draw one map. */
+    event facet Footprints(census_path: String, min_products: Long = 500, dest: String) => (bodies: Json,
+            footprints: Long)
+        with Effect(kind = "external") with Cost(tier = "moderate") with Timeout(minutes = 60)
+
+    /** One body's coverage map: products per grid cell, filterable by mission.
+      *
+      * ⚠️ Drawn from bounding boxes, which are larger than the ground an
+      * oblique image saw, so coverage is OVERSTATED. Global mosaics are kept
+      * off the grid and counted separately; left in, they would paint every
+      * cell. */
+    event facet BodyMap(body: Json, res: Double = 1.0) => (map_path: String, summary: Json)
+        with Effect(kind = "io") with Cost(tier = "cheap")
+
+    /** The landing page: every body's share of products with a box, links to
+      * the maps, and the name variants. */
+    event facet Index(census_path: String, maps: Json) => (index_path: String, bodies_listed: Long, maps: Long)
+        with Effect(kind = "io") with Cost(tier = "free")
+
+    facet MapAll(bodies: Json, res: Double, width: Long) => (maps: Json)
+        andThen foreach b in $.bodies limit $.width {
+            m = BodyMap(body = $.b, res = $.res)
+            yield MapAll(maps += m.summary)
+        }
+}
+
+namespace pds {
+
+    /** Project 1: does the PDS archive still match its own checksums?
+      *
+      * `per_node` products per archive site; the default (40 x 12 sites) is a
+      * pilot. Raise it for tighter intervals: the interval on a 0-failure site
+      * is roughly 0 to 3.7/n. */
+    workflow AuditArchive(
+        per_node: Long = 40,
+        seed: Long = 1,
+        batch_size: Long = 10,
+        max_mb: Double = 20.0,
+        width: Long = 6,
+        work_dir: String = "audit"
+    ) => (report: String, html: String, checked: Long, failed: Long, estimated_failing: Long) andThen {
+
+        strata = pds.audit.Strata(dest = $.work_dir ++ "/strata.json")
+
+        sample = pds.audit.Sample(
+            strata_path = strata.strata_path,
+            per_node = $.per_node,
+            seed = $.seed,
+            batch_size = $.batch_size,
+            dest = $.work_dir ++ "/sample.json"
+        )
+
+        checks = pds.audit.CheckAll(
+            batches = sample.batches,
+            max_mb = $.max_mb,
+            width = $.width,
+            dest = $.work_dir ++ "/results"
+        )
+
+        report = pds.audit.Report(
+            strata_path = strata.strata_path,
+            results = checks.results,
+            seed = $.seed,
+            max_mb = $.max_mb,
+            dest = $.work_dir
+        )
+
+        yield AuditArchive(report = report.report_path, html = report.html_path,
+            checked = report.checked, failed = report.failed,
+            estimated_failing = report.estimated_failing)
+    }
+
+    /** Project 2: what can the PDS archive place on a map?
+      *
+      * One coverage map per body with at least `min_products` bounding boxes,
+      * and an index of every body's share of products that have one. */
+    workflow MapCoverage(
+        min_products: Long = 500,
+        res: Double = 1.0,
+        width: Long = 4,
+        work_dir: String = "coverage"
+    ) => (index: String, bodies: Long, footprints: Long) andThen {
+
+        census = pds.coverage.Census(dest = $.work_dir ++ "/census.json")
+
+        prints = pds.coverage.Footprints(
+            census_path = census.census_path,
+            min_products = $.min_products,
+            dest = $.work_dir ++ "/footprints"
+        )
+
+        maps = pds.coverage.MapAll(bodies = prints.bodies, res = $.res, width = $.width)
+
+        index = pds.coverage.Index(census_path = census.census_path, maps = maps.maps)
+
+        yield MapCoverage(index = index.index_path, bodies = index.maps, footprints = prints.footprints)
+    }
+}

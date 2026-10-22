@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fwh-pds"
+version = "0.1.0"
+description = "NASA Planetary Data System archive: a checksum audit and per-body coverage maps from the PDS Registry"
+requires-python = ">=3.11"
+dependencies = [
+    "facetwork>=0.31.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.8.0"]
+
+[project.entry-points."facetwork.domains"]
+pds = "pdsarchive:domain"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pdsarchive = ["ffl/*.ffl"]
+
+[tool.ruff]
+line-length = 110
