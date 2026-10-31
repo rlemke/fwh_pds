@@ -1,5 +1,5 @@
 // The NASA Planetary Data System archive, audited and mapped, from the PDS
-// Registry Search API (about 90.7 million products across a dozen archive
+// Registry Search API (about 90.7 million products across nine archive
 // sites, 2026-10).
 //
 // ⚠️ Both workflows describe the archive through its REGISTRY. A file the
@@ -96,7 +96,7 @@ namespace pds {
 
     /** Project 1: does the PDS archive still match its own checksums?
       *
-      * `per_node` products per archive site; the default (40 x 12 sites) is a
+      * `per_node` products per archive site; the default (40 x 9 sites) is a
       * pilot. Raise it for tighter intervals: the interval on a 0-failure site
       * is roughly 0 to 3.7/n. */
     workflow AuditArchive(

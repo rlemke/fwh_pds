@@ -19,8 +19,14 @@ Two questions about the archive as a whole:
 ## FFL at a glance
 
 ```ffl
-audit    = pds.AuditArchive(per_node = 40, seed = 20261021)
-coverage = pds.MapCoverage(min_products = 500, res = 1.0)
+namespace demo {
+    // The checksum audit and the coverage maps; neither needs the other.
+    workflow Both() => (audit_html: String, coverage_index: String) andThen {
+        audit    = pds.AuditArchive(per_node = 40, seed = 20261021)
+        coverage = pds.MapCoverage(min_products = 500, res = 1.0)
+        yield Both(audit_html = audit.html, coverage_index = coverage.index)
+    }
+}
 ```
 
 More in [docs/ffl-examples.md](docs/ffl-examples.md).
